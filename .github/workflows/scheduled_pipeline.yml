@@ -1,0 +1,59 @@
+name: AajKiJanta Scheduled Pipeline
+
+on:
+  schedule:
+    # Runs every 6 hours (at 00:00, 06:00, 12:00, 18:00 UTC)
+    - cron: '0 */6 * * *'
+    
+    # Alternatively, for every 12 hours (at 00:00 and 12:00 UTC), comment above and uncomment below:
+    # - cron: '0 */12 * * *'
+
+  # Allows you to click "Run workflow" manually anytime from the GitHub website
+  workflow_dispatch:
+    inputs:
+      count:
+        description: 'Articles per industry to generate'
+        required: true
+        default: '1'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+          - '5'
+
+jobs:
+  scrape-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 📥 Check out repository code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🚀 Run All 7 Industry Pillars
+        env:
+          # Injected safely from GitHub Repository Secrets
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GEMINI_MODEL: 'gemini-3.5-flash'
+          PYTHONIOENCODING: 'utf-8'
+          PYTHONUNBUFFERED: '1'
+        run: |
+          # Use user-selected count if triggered manually, otherwise default to 1 per pillar (7 articles total)
+          COUNT="${{ github.event.inputs.count || '1' }}"
+          echo "Starting automated batch run with $COUNT article(s) per pillar..."
+          python run_all.py --count $COUNT
