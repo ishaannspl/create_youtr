@@ -1,0 +1,119 @@
+name: Generate site articles
+
+# Runs when the website builder submits a new publication. The website creates a row in
+# pipeline_jobs, then calls the GitHub API to dispatch this workflow with that job_id.
+# Progress and the finished articles are written to Supabase, which the website reads.
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "pipeline_jobs id created by the website"
+        required: true
+        type: string
+      site_slug:
+        description: "Publication slug"
+        required: true
+        type: string
+      industry:
+        description: "Industry for source discovery"
+        required: true
+        type: string
+      topic:
+        description: "What the publication focuses on"
+        required: true
+        type: string
+      audience:
+        description: "Who the publication is for"
+        required: false
+        default: ""
+        type: string
+      count:
+        description: "Articles to generate"
+        required: true
+        default: "3"
+        type: string
+      region:
+        description: "Region for source discovery"
+        required: false
+        default: "in"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: generate-${{ inputs.site_slug }}
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: genznews-wt-web
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: genznews-wt-web/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate articles
+        # Inputs are passed through environment variables and quoted, never pasted into the script,
+        # so a topic or audience containing shell characters cannot run commands.
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.5-flash' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GEMINI_DELAY_SECONDS: "1"
+          PYTHONIOENCODING: utf-8
+          PYTHONUNBUFFERED: "1"
+          JOB_ID: ${{ inputs.job_id }}
+          SITE_SLUG: ${{ inputs.site_slug }}
+          INDUSTRY: ${{ inputs.industry }}
+          TOPIC: ${{ inputs.topic }}
+          AUDIENCE: ${{ inputs.audience }}
+          COUNT: ${{ inputs.count }}
+          REGION: ${{ inputs.region }}
+        run: |
+          python dynamic_pipeline.py \
+            --industry "$INDUSTRY" \
+            --topics "$TOPIC" \
+            --count "$COUNT" \
+            --site-slug "$SITE_SLUG" \
+            --region "$REGION" \
+            --job-id "$JOB_ID" \
+            --audience "$AUDIENCE"
+
+      - name: Mark the job failed if the workflow did not finish
+        if: failure() || cancelled()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          JOB_ID: ${{ inputs.job_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import os
+          from app.database import get_pipeline_job, update_pipeline_job
+          job_id = os.environ["JOB_ID"]
+          job = get_pipeline_job(job_id)
+          # The pipeline already records a specific reason when it fails cleanly; only fill in the gap otherwise.
+          if job and job.get("status") not in ("completed", "failed"):
+              update_pipeline_job(
+                  job_id,
+                  status="failed",
+                  error_message="The generation workflow stopped before finishing. Details: " + os.environ["RUN_URL"],
+              )
+          PY

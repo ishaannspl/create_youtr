@@ -1,5 +1,6 @@
 import { getSite, publishSite, updateSiteGeneration } from "@/lib/sites";
 import type { PublicationArticle, PublicationSite } from "@/lib/sites";
+import { QUEUED_TIMEOUT_MS, getJob, getSiteArticles, markJobFailed, pipelineMode } from "@/lib/pipeline";
 
 function mapPipelineArticle(article: Record<string, unknown>, fallbackIndustry: string): PublicationArticle {
   return {
@@ -24,16 +25,23 @@ export async function GET(_request: Request, { params }: { params: Promise<{ slu
   if (!site) return Response.json({ error: "Publication not found." }, { status: 404 });
 
   if (site.pipelineJobId) {
-    const base = (process.env.PIPELINE_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
     try {
-      const jobResponse = await fetch(`${base}/api/v1/jobs/${encodeURIComponent(site.pipelineJobId)}`, {
-        cache: "no-store",
-        signal: AbortSignal.timeout(5000),
-      });
-      if (jobResponse.ok) {
-        const job = await jobResponse.json();
+      const job = await getJob(site.pipelineJobId);
+      if (job) {
         const desiredTotal = site.targetArticleCount || Number(job.target_count || 0);
-        const rawStatus = String(job.status || "discovering");
+        let rawStatus = String(job.status || "discovering");
+        let jobError = typeof job.error_message === "string" && job.error_message ? job.error_message : "";
+
+        // In GitHub mode a job that never leaves "queued" means the workflow did not start.
+        if (pipelineMode() === "github" && ["queued", "pending"].includes(rawStatus) && job.created_at) {
+          const age = Date.now() - new Date(job.created_at).getTime();
+          if (age > QUEUED_TIMEOUT_MS) {
+            rawStatus = "failed";
+            jobError = "The generation workflow did not start within 10 minutes. Check the Actions tab of the GitHub repository, then retry.";
+            await markJobFailed(site.pipelineJobId, jobError);
+          }
+        }
+
         let nextStatus: NonNullable<PublicationSite["generationStatus"]>;
         if (rawStatus === "failed") nextStatus = "failed";
         else if (rawStatus === "completed") nextStatus = site.articles.filter((article) => article.isSample !== true).length >= desiredTotal ? "completed" : "partial";
@@ -43,26 +51,16 @@ export async function GET(_request: Request, { params }: { params: Promise<{ slu
 
         const update: Parameters<typeof updateSiteGeneration>[1] = { generationStatus: nextStatus };
         if (nextStatus === "failed") {
-          update.generationError = typeof job.error_message === "string" && job.error_message
-            ? job.error_message
-            : "The pipeline could not finish this edition. Check the pipeline API logs and retry for the remaining stories.";
+          update.generationError = jobError || "The pipeline could not finish this edition. Check the pipeline logs and retry for the remaining stories.";
         } else if (nextStatus === "partial") {
-          update.generationError = typeof job.error_message === "string" && job.error_message
-            ? job.error_message
-            : `This site has ${site.articles.filter((article) => article.isSample !== true).length} of ${desiredTotal} requested stories. Retry to generate the remaining articles.`;
+          update.generationError = jobError || `This site has ${site.articles.filter((article) => article.isSample !== true).length} of ${desiredTotal} requested stories. Retry to generate the remaining articles.`;
         } else {
           update.generationError = undefined;
         }
 
         // Fetch saved stories on every poll so the preview grows as each article is persisted.
-        const articleResponse = await fetch(`${base}/api/v1/sites/${encodeURIComponent(slug)}/articles`, {
-          cache: "no-store",
-          signal: AbortSignal.timeout(5000),
-        });
-        if (articleResponse.ok) {
-          const payload = await articleResponse.json() as { articles?: Record<string, unknown>[] };
-          const nextArticles = (Array.isArray(payload.articles) ? payload.articles : [])
-            .map((article) => mapPipelineArticle(article, site!.industry));
+        try {
+          const nextArticles = (await getSiteArticles(slug)).map((article) => mapPipelineArticle(article, site!.industry));
           update.articles = nextArticles;
           if (rawStatus === "completed" && nextArticles.filter((article) => article.isSample !== true).length >= desiredTotal) {
             update.generationStatus = "completed";
@@ -70,6 +68,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ slu
           } else if (rawStatus === "completed") {
             update.generationStatus = "partial";
           }
+        } catch {
+          // Keep the stories already saved; the next poll tries again.
         }
 
         site = await updateSiteGeneration(slug, update) || site;

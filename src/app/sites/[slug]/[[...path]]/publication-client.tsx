@@ -5,6 +5,7 @@ import Image from "next/image";
 import { useEffect, useState } from "react";
 import type { PublicationSite } from "@/lib/sites";
 import { getIndustryDefinition, getPublicationPages, personalizePageText } from "@/lib/industries";
+import { ThemeHome } from "./themes";
 
 function SiteLoading({ message }: { message: string }) {
   return <main className="publication-state"><span className="wordmark-icon">f.</span><p>{message}</p><Link href="/">Back to Forme</Link></main>;
@@ -86,10 +87,7 @@ export default function GeneratedPublication({ slug, pathParts, isPreview }: { s
     <main className={`publication template-${site.template.toLowerCase()}`}>
       {isPreview && <div className="publication-preview-banner">PRIVATE PREVIEW <span>Only you can see this draft site.</span><Link href={`/preview/${site.slug}`}>Return to review ↗</Link></div>}
       <header className="publication-header"><Link href={`/sites/${site.slug}${isPreview ? "?preview=1" : ""}`} className="publication-brand">{site.name}<span>✳</span><small>{site.topic}</small></Link><nav aria-label="Publication navigation">{primaryNavigation.map((item) => <Link key={item.path || "home"} href={`/sites/${site.slug}${item.path ? `/${item.path}` : ""}${isPreview ? "?preview=1" : ""}`}>{item.label}</Link>)}</nav><Link className="publication-about-link" href={`/sites/${site.slug}/${aboutPage?.path || "about"}${isPreview ? "?preview=1" : ""}`}>About ↗</Link></header>
-      {pathKey === "" ? <>
-        <section className="publication-hero"><div className="publication-hero-copy"><span className="publication-eyebrow">{industry.label.toUpperCase()} FOR {site.audience.toUpperCase()}</span><h1>{site.topic}</h1><p>{industry.homeDescription} {site.audience} can explore sourced stories, guides, and useful context here.</p><Link href={`/sites/${site.slug}/latest${isPreview ? "?preview=1" : ""}`} className="publication-button">Explore the latest <span>↗</span></Link></div><div className="publication-cover-art"><div className="publication-cover-sun"/><div className="publication-cover-shape shape-one"/><div className="publication-cover-shape shape-two"/><span>{industry.shortLabel.toUpperCase()}<br/>IDEAS<br/>AND NOTES</span></div></section>
-        <section className="publication-content"><div className="publication-section-title"><div><span>THE FIRST EDITION</span><h2>Start exploring.</h2></div><Link href={`/sites/${site.slug}/latest${isPreview ? "?preview=1" : ""}`}>All stories ↗</Link></div>{site.generationStatus && site.generationStatus !== "completed" && <p className="article-deck">Your first edition is {site.generationStatus}: {site.articles.filter((item) => item.isSample !== true).length} of {site.targetArticleCount} articles saved.</p>}<div className="publication-cards">{site.articles.map((item) => <Link href={articleHref(item.slug)} key={item.slug} className="publication-card">{item.imageUrl ? <Image className="publication-card-image" width={720} height={480} unoptimized src={item.imageUrl} alt={`Image from ${item.sourceDomain || "the source publication"}`} loading="lazy" onError={(event) => { event.currentTarget.style.display = "none"; }} /> : <span className="card-art">✳</span>}<span className="article-category">{item.category}{item.sourceDomain ? ` · ${item.sourceDomain}` : ""}</span><h3>{item.title}</h3><p>{item.excerpt}</p><span className="card-read">Read story ↗</span></Link>)}</div></section>
-      </> : article ? <article className="publication-article">
+      {pathKey === "" ? <ThemeHome site={site} hrefFor={articleHref} latestHref={`/sites/${site.slug}/latest${isPreview ? "?preview=1" : ""}`} /> : article ? <article className="publication-article">
         <div className="article-topline"><span className="article-category">{article.category} · FIRST EDITION</span><span>{articleReadMinutes} MIN READ</span></div>
         <h1>{article.title}</h1>
         <p className="article-deck">{article.excerpt}</p>
