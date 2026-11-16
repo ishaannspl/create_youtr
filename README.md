@@ -38,3 +38,12 @@ Local publication records are stored in `.local-sites/sites.json` and are exclud
 - Images are taken from source pages' Open Graph metadata for this check. Some sources do not provide an image, block hotlinking, or change image URLs; in those cases the layout uses its designed visual fallback. Images are not copied into local media storage.
 - Publishing only changes visibility in this local app. It does not deploy to a public host, create subdomains, or connect a custom domain.
 - The JSON file store is for local development only. Replace it with Supabase or another shared database before deployment.
+
+## Deploying on Vercel
+
+Vercel's file system is read-only, so a hosted site stores publications in Supabase and runs article generation through GitHub Actions.
+
+1. Run `supabase/forme_sites.sql` once in the Supabase SQL Editor (and migrations `0003` and `0004` from `genznews-wt-web/web/supabase/migrations`).
+2. In the GitHub repository, add the secrets `GEMINI_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`.
+3. In Vercel, set the environment variables listed in `.env.example` with `PIPELINE_MODE=github`. A fine-grained token with Actions: Read and write on the repository goes in `GITHUB_DISPATCH_TOKEN`.
+4. Redeploy. The "Generate site articles" workflow starts each time someone builds a site.

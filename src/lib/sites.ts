@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getIndustryDefinition, type ArticleTargetCount, type IndustryId } from "@/lib/industries";
+import { supabaseRest } from "@/lib/pipeline";
 
 export type PublicationArticle = {
   slug: string;
@@ -78,8 +79,50 @@ async function writeSites(sites: PublicationSite[]) {
   await rename(temporaryPath, dataPath);
 }
 
+/* ---------- Storage ----------
+ * Local development keeps sites in .local-sites/sites.json. Vercel's file system is read-only, so a
+ * hosted deployment stores each site as one row in the Supabase table forme_sites
+ * (see supabase/forme_sites.sql). Hosted mode is chosen automatically on Vercel, or with SITES_STORE=supabase. */
+const hostedStoreEnabled = () =>
+  process.env.SITES_STORE === "supabase" || (process.env.SITES_STORE !== "file" && !!process.env.VERCEL && !!process.env.SUPABASE_URL);
+
+function normalizeSite(site: PublicationSite & { style?: string }): PublicationSite {
+  const { style, ...rest } = site;
+  return {
+    ...rest,
+    industry: getIndustryDefinition(site.industry).id,
+    targetArticleCount: site.targetArticleCount ?? 10,
+    template: site.template ?? (style === "Modern" ? "Studio" : style === "Minimal" ? "Minimal" : "Editorial"),
+    articles: site.articles ?? [],
+  };
+}
+
+async function loadSite(slug: string): Promise<PublicationSite | null> {
+  if (!hostedStoreEnabled()) return (await readSites()).find((site) => site.slug === slug) ?? null;
+  const response = await supabaseRest(`forme_sites?slug=eq.${encodeURIComponent(slug)}&select=data&limit=1`);
+  if (!response.ok) throw new Error(`Could not read the publication from Supabase (${response.status}). Apply supabase/forme_sites.sql.`);
+  const rows = (await response.json()) as { data: PublicationSite }[];
+  return rows[0] ? normalizeSite(rows[0].data) : null;
+}
+
+async function saveSite(site: PublicationSite): Promise<void> {
+  if (!hostedStoreEnabled()) {
+    const sites = await readSites();
+    const index = sites.findIndex((item) => item.slug === site.slug);
+    if (index >= 0) sites[index] = site; else sites.push(site);
+    await writeSites(sites);
+    return;
+  }
+  const response = await supabaseRest("forme_sites?on_conflict=slug", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({ slug: site.slug, data: site, updated_at: new Date().toISOString() }),
+  });
+  if (!response.ok) throw new Error(`Could not save the publication to Supabase (${response.status}). Apply supabase/forme_sites.sql.`);
+}
+
 export async function getSite(slug: string) {
-  return (await readSites()).find((site) => site.slug === slug) ?? null;
+  return loadSite(slug);
 }
 
 function makeSampleArticles(topic: string): PublicationArticle[] {
@@ -201,9 +244,8 @@ export async function createSite(input: {
   region?: string;
   template: "Editorial" | "Studio" | "Minimal" | "Nocturne" | "Coastline" | "Atelier";
 }) {
-  const sites = await readSites();
   const baseSlug = slugify(input.name);
-  const slug = sites.some((site) => site.slug === baseSlug)
+  const slug = (await loadSite(baseSlug))
     ? `${baseSlug}-${Math.random().toString(36).slice(2, 6)}`
     : baseSlug;
   const site: PublicationSite = {
@@ -216,24 +258,23 @@ export async function createSite(input: {
     articles: [],
     generationStatus: "queued",
   };
-  await writeSites([...sites, site]);
+  await saveSite(site);
   return site;
 }
 
 export async function updateSiteGeneration(slug: string, update: Partial<Pick<PublicationSite, "generationStatus" | "generationError" | "pipelineJobId" | "articles">>) {
-  const sites = await readSites();
-  const index = sites.findIndex((site) => site.slug === slug);
-  if (index < 0) return null;
-  sites[index] = { ...sites[index], ...update };
-  await writeSites(sites);
-  return sites[index];
+  const current = await loadSite(slug);
+  if (!current) return null;
+  const next = { ...current, ...update };
+  // Polling calls this every few seconds; skip the write when nothing changed.
+  if (JSON.stringify(next) !== JSON.stringify(current)) await saveSite(next);
+  return next;
 }
 
 export async function publishSite(slug: string) {
-  const sites = await readSites();
-  const index = sites.findIndex((site) => site.slug === slug);
-  if (index < 0) return null;
-  sites[index] = { ...sites[index], status: "published" };
-  await writeSites(sites);
-  return sites[index];
+  const current = await loadSite(slug);
+  if (!current) return null;
+  const next: PublicationSite = { ...current, status: "published" };
+  await saveSite(next);
+  return next;
 }

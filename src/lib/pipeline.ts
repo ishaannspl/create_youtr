@@ -43,7 +43,7 @@ function supabase() {
   };
 }
 
-async function rest(path: string, init: RequestInit = {}) {
+export async function rest(path: string, init: RequestInit = {}) {
   const { base, headers } = supabase();
   return fetch(`${base}/${path}`, {
     ...init,
@@ -52,6 +52,8 @@ async function rest(path: string, init: RequestInit = {}) {
     signal: AbortSignal.timeout(8000),
   });
 }
+
+export { rest as supabaseRest };
 
 export type StartInput = {
   slug: string;
